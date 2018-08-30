@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/pingcap/errors"
-	"github.com/shopspring/decimal"
 	"github.com/siddontang/go-log/log"
 	"github.com/siddontang/go/hack"
 
@@ -1240,8 +1239,7 @@ func decodeDecimal(data []byte, precision int, decimals int, useDecimal bool) (i
 	}
 
 	if useDecimal {
-		f, err := decimal.NewFromString(hack.String(res.Bytes()))
-		return f, pos, err
+		return string(res.Bytes()), pos, nil
 	}
 
 	f, err := strconv.ParseFloat(hack.String(res.Bytes()), 64)
