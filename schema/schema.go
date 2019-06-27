@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juju/errors"
+	"github.com/pingcap/errors"
 	"github.com/siddontang/go-mysql/mysql"
 )
 
@@ -17,6 +17,7 @@ var ErrTableNotExist = errors.New("table is not exist")
 var ErrMissingTableMeta = errors.New("missing table meta")
 var HAHealthCheckSchema = "mysql.ha_health_check"
 
+// Different column type
 const (
 	TYPE_NUMBER    = iota + 1 // tinyint, smallint, mediumint, int, bigint, year
 	TYPE_FLOAT                // float, double
@@ -29,6 +30,7 @@ const (
 	TYPE_TIME                 // time
 	TYPE_BIT                  // bit
 	TYPE_JSON                 // json
+	TYPE_DECIMAL              // decimal
 )
 
 type TableColumn struct {
@@ -69,9 +71,10 @@ func (ta *Table) AddColumn(name string, columnType string, collation string, ext
 	ta.Columns[index].RawType = columnType
 
 	if strings.HasPrefix(columnType, "float") ||
-		strings.HasPrefix(columnType, "double") ||
-		strings.HasPrefix(columnType, "decimal") {
+		strings.HasPrefix(columnType, "double") {
 		ta.Columns[index].Type = TYPE_FLOAT
+	} else if strings.HasPrefix(columnType, "decimal") {
+		ta.Columns[index].Type = TYPE_DECIMAL
 	} else if strings.HasPrefix(columnType, "enum") {
 		ta.Columns[index].Type = TYPE_ENUM
 		ta.Columns[index].EnumValues = strings.Split(strings.Replace(
@@ -365,7 +368,7 @@ func (ta *Table) fetchPrimaryKeyColumns() error {
 	return nil
 }
 
-// Get primary keys in one row for a table, a table may use multi fields as the PK
+// GetPKValues gets primary keys in one row for a table, a table may use multi fields as the PK
 func (ta *Table) GetPKValues(row []interface{}) ([]interface{}, error) {
 	indexes := ta.PKColumns
 	if len(indexes) == 0 {
@@ -384,7 +387,7 @@ func (ta *Table) GetPKValues(row []interface{}) ([]interface{}, error) {
 	return values, nil
 }
 
-// Get term column's value
+// GetColumnValue gets term column's value
 func (ta *Table) GetColumnValue(column string, row []interface{}) (interface{}, error) {
 	index := ta.FindColumn(column)
 	if index == -1 {
