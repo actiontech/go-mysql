@@ -9,7 +9,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/pingcap/errors"
+	"github.com/juju/errors"
+	"github.com/opentracing/opentracing-go"
 	"github.com/satori/go.uuid"
 	. "github.com/siddontang/go-mysql/mysql"
 )
@@ -26,8 +27,9 @@ type BinlogEvent struct {
 	// raw binlog data which contains all data, including binlog header and event body, and including crc32 checksum if exists
 	RawData []byte
 
-	Header *EventHeader
-	Event  Event
+	Header      *EventHeader
+	Event       Event
+	SpanContest opentracing.SpanContext
 }
 
 func (e *BinlogEvent) Dump(w io.Writer) {
@@ -440,29 +442,20 @@ func (e *MariadbBinlogCheckPointEvent) Dump(w io.Writer) {
 }
 
 type MariadbGTIDEvent struct {
-	GTID     MariadbGTID
-	CommitID uint64
+	GTID MariadbGTID
 }
 
 func (e *MariadbGTIDEvent) Decode(data []byte) error {
-	pos := 0
 	e.GTID.SequenceNumber = binary.LittleEndian.Uint64(data)
-	pos += 8
-	e.GTID.DomainID = binary.LittleEndian.Uint32(data[pos:])
-	pos += 4
-	flag := uint8(data[pos])
-	pos += 1
+	e.GTID.DomainID = binary.LittleEndian.Uint32(data[8:])
 
-	if (flag & BINLOG_MARIADB_FL_GROUP_COMMIT_ID) > 0 {
-		e.CommitID = binary.LittleEndian.Uint64(data[pos:])
-	}
+	// we don't care commit id now, maybe later
 
 	return nil
 }
 
 func (e *MariadbGTIDEvent) Dump(w io.Writer) {
 	fmt.Fprintf(w, "GTID: %v\n", e.GTID)
-	fmt.Fprintf(w, "CommitID: %v\n", e.CommitID)
 	fmt.Fprintln(w)
 }
 
@@ -485,7 +478,6 @@ func (e *MariadbGTIDListEvent) Decode(data []byte) error {
 		e.GTIDs[i].ServerID = binary.LittleEndian.Uint32(data[pos:])
 		pos += 4
 		e.GTIDs[i].SequenceNumber = binary.LittleEndian.Uint64(data[pos:])
-		pos += 8
 	}
 
 	return nil

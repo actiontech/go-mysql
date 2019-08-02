@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pingcap/errors"
+	"github.com/juju/errors"
 )
 
 var (
@@ -32,9 +32,8 @@ type BinlogParser struct {
 	// used to start/stop processing
 	stopProcessing uint32
 
-	useDecimal          bool
-	ignoreJSONDecodeErr bool
-	verifyChecksum      bool
+	useDecimal     bool
+	verifyChecksum bool
 }
 
 func NewBinlogParser() *BinlogParser {
@@ -192,10 +191,6 @@ func (p *BinlogParser) SetUseDecimal(useDecimal bool) {
 	p.useDecimal = useDecimal
 }
 
-func (p *BinlogParser) SetIgnoreJSONDecodeError(ignoreJSONDecodeErr bool) {
-	p.ignoreJSONDecodeErr = ignoreJSONDecodeErr
-}
-
 func (p *BinlogParser) SetVerifyChecksum(verify bool) {
 	p.verifyChecksum = verify
 }
@@ -255,8 +250,6 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 				e = &RowsQueryEvent{}
 			case GTID_EVENT:
 				e = &GTIDEvent{}
-			case ANONYMOUS_GTID_EVENT:
-				e = &GTIDEvent{}
 			case BEGIN_LOAD_QUERY_EVENT:
 				e = &BeginLoadQueryEvent{}
 			case EXECUTE_LOAD_QUERY_EVENT:
@@ -297,7 +290,7 @@ func (p *BinlogParser) parseEvent(h *EventHeader, data []byte, rawData []byte) (
 	return e, nil
 }
 
-// Parse: Given the bytes for a a binary log event: return the decoded event.
+// Given the bytes for a a binary log event: return the decoded event.
 // With the exception of the FORMAT_DESCRIPTION_EVENT event type
 // there must have previously been passed a FORMAT_DESCRIPTION_EVENT
 // into the parser for this to work properly on any given event.
@@ -324,7 +317,7 @@ func (p *BinlogParser) Parse(data []byte) (*BinlogEvent, error) {
 		return nil, err
 	}
 
-	return &BinlogEvent{RawData: rawData, Header: h, Event: e}, nil
+	return &BinlogEvent{RawData: rawData, Header: h, Event: e, SpanContest: nil}, nil
 }
 
 func (p *BinlogParser) verifyCrc32Checksum(rawData []byte) error {
@@ -360,7 +353,6 @@ func (p *BinlogParser) newRowsEvent(h *EventHeader) *RowsEvent {
 	e.parseTime = p.parseTime
 	e.timestampStringLocation = p.timestampStringLocation
 	e.useDecimal = p.useDecimal
-	e.ignoreJSONDecodeErr = p.ignoreJSONDecodeErr
 
 	switch h.EventType {
 	case WRITE_ROWS_EVENTv0:

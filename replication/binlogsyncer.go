@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync"
 	"time"
 
-	"github.com/pingcap/errors"
-	uuid "github.com/satori/go.uuid"
+	"github.com/juju/errors"
+	"github.com/opentracing/opentracing-go"
+	"github.com/satori/go.uuid"
 	"github.com/siddontang/go-log/log"
 	"github.com/siddontang/go-mysql/client"
 	. "github.com/siddontang/go-mysql/mysql"
@@ -93,14 +93,6 @@ type BinlogSyncerConfig struct {
 	// For MariaDB, binlog_checksum was introduced since MariaDB 5.3, but CRC32 was set as default value since MariaDB 10.2.1 .
 	// https://mariadb.com/kb/en/library/replication-and-binary-log-server-system-variables/#binlog_checksum
 	VerifyChecksum bool
-
-	// DumpCommandFlag is used to send binglog dump command. Default 0, aka BINLOG_DUMP_NEVER_STOP.
-	// For MySQL, BINLOG_DUMP_NEVER_STOP and BINLOG_DUMP_NON_BLOCK are available.
-	// https://dev.mysql.com/doc/internals/en/com-binlog-dump.html#binlog-dump-non-block
-	// For MariaDB, BINLOG_DUMP_NEVER_STOP, BINLOG_DUMP_NON_BLOCK and BINLOG_SEND_ANNOTATE_ROWS_EVENT are available.
-	// https://mariadb.com/kb/en/library/com_binlog_dump/
-	// https://mariadb.com/kb/en/library/annotate_rows_event/
-	DumpCommandFlag uint16
 }
 
 // BinlogSyncer syncs binlog event from server.
@@ -201,17 +193,10 @@ func (b *BinlogSyncer) registerSlave() error {
 		b.c.Close()
 	}
 
-	addr := ""
-	if strings.Contains(b.cfg.Host, "/") {
-		addr = b.cfg.Host
-	} else {
-		addr = fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port)
-	}
-
-	log.Infof("register slave for master server %s", addr)
+	log.Infof("register slave for master server %s:%d", b.cfg.Host, b.cfg.Port)
 	var err error
-	b.c, err = client.Connect(addr, b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
-		c.SetTLSConfig(b.cfg.TLSConfig)
+	b.c, err = client.Connect(fmt.Sprintf("%s:%d", b.cfg.Host, b.cfg.Port), b.cfg.User, b.cfg.Password, "", func(c *client.Conn) {
+		c.TLSConfig = b.cfg.TLSConfig
 	})
 	if err != nil {
 		return errors.Trace(err)
@@ -286,7 +271,7 @@ func (b *BinlogSyncer) registerSlave() error {
 	if b.cfg.HeartbeatPeriod > 0 {
 		_, err = b.c.Execute(fmt.Sprintf("SET @master_heartbeat_period=%d;", b.cfg.HeartbeatPeriod))
 		if err != nil {
-			log.Errorf("failed to set @master_heartbeat_period=%d, err: %v", b.cfg.HeartbeatPeriod, err)
+			log.Error("failed to set @master_heartbeat_period=%d", b.cfg.HeartbeatPeriod, err)
 			return errors.Trace(err)
 		}
 	}
@@ -420,7 +405,7 @@ func (b *BinlogSyncer) writeBinlogDumpCommand(p Position) error {
 	binary.LittleEndian.PutUint32(data[pos:], p.Pos)
 	pos += 4
 
-	binary.LittleEndian.PutUint16(data[pos:], b.cfg.DumpCommandFlag)
+	binary.LittleEndian.PutUint16(data[pos:], BINLOG_DUMP_NEVER_STOP)
 	pos += 2
 
 	binary.LittleEndian.PutUint32(data[pos:], b.cfg.ServerID)
@@ -432,7 +417,7 @@ func (b *BinlogSyncer) writeBinlogDumpCommand(p Position) error {
 }
 
 func (b *BinlogSyncer) writeBinlogDumpMysqlGTIDCommand(gset GTIDSet) error {
-	p := Position{Name: "", Pos: 4}
+	p := Position{"", 4}
 	gtidData := gset.Encode()
 
 	b.c.ResetSequence()
@@ -488,7 +473,7 @@ func (b *BinlogSyncer) writeBinlogDumpMariadbGTIDCommand(gset GTIDSet) error {
 	}
 
 	// Since we use @slave_connect_state, the file and position here are ignored.
-	return b.writeBinlogDumpCommand(Position{Name: "", Pos: 0})
+	return b.writeBinlogDumpCommand(Position{"", 0})
 }
 
 // localHostname returns the hostname that register slave would register as.
@@ -634,7 +619,10 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 	}()
 
 	for {
+		span := opentracing.StartSpan("data source: get incremental data from  ReadPacket()")
+		span.SetTag("before get incremental data  time:", time.Now().Unix())
 		data, err := b.c.ReadPacket()
+		span.SetTag("after  get incremental data time:", time.Now().Unix())
 		if err != nil {
 			log.Error(err)
 
@@ -671,7 +659,6 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 			// we connect the server and begin to re-sync again.
 			continue
 		}
-
 		//set read timeout
 		if b.cfg.ReadTimeout > 0 {
 			b.c.SetReadDeadline(time.Now().Add(b.cfg.ReadTimeout))
@@ -682,7 +669,7 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 
 		switch data[0] {
 		case OK_HEADER:
-			if err = b.parseEvent(s, data); err != nil {
+			if err = b.parseEvent(span.Context(), s, data); err != nil {
 				s.closeWithError(err)
 				return
 			}
@@ -701,13 +688,16 @@ func (b *BinlogSyncer) onStream(s *BinlogStreamer) {
 			log.Errorf("invalid stream header %c", data[0])
 			continue
 		}
+		span.Finish()
 	}
 }
 
-func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
+func (b *BinlogSyncer) parseEvent(spanContext opentracing.SpanContext, s *BinlogStreamer, data []byte) error {
 	//skip OK byte, 0x00
 	data = data[1:]
-
+	span := opentracing.GlobalTracer().StartSpan("  incremental data are  conversion to  BinlogEvent", opentracing.ChildOf(spanContext))
+	span.SetTag("time", time.Now().Unix())
+	defer span.Finish()
 	needACK := false
 	if b.cfg.SemiSyncEnabled && (data[0] == SemiSyncIndicator) {
 		needACK = (data[1] == 0x01)
@@ -716,6 +706,8 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 	}
 
 	e, err := b.parser.Parse(data)
+	e.SpanContest = span.Context()
+	span.SetTag("tx timestap", e.Header.Timestamp)
 	if err != nil {
 		return errors.Trace(err)
 	}
@@ -775,10 +767,20 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 }
 
 func (b *BinlogSyncer) getGtidSet() GTIDSet {
+	var gtidSet GTIDSet
+
 	if b.gset == nil {
 		return nil
 	}
-	return b.gset.Clone()
+
+	switch b.cfg.Flavor {
+	case MariaDBFlavor:
+		gtidSet, _ = ParseGTIDSet(MariaDBFlavor, b.gset.String())
+	default:
+		gtidSet, _ = ParseGTIDSet(MySQLFlavor, b.gset.String())
+	}
+
+	return gtidSet
 }
 
 // LastConnectionID returns last connectionID.
