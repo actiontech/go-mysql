@@ -3,6 +3,7 @@ package replication
 import (
 	"context"
 	"github.com/pingcap/errors"
+	"github.com/opentracing/opentracing-go"
 	"github.com/siddontang/go-log/log"
 	"time"
 )
@@ -28,6 +29,10 @@ func (s *BinlogStreamer) GetEvent(ctx context.Context) (*BinlogEvent, error) {
 
 	select {
 	case c := <-s.ch:
+		span := opentracing.StartSpan("send binlogEvent from go-mysql", opentracing.FollowsFrom(c.SpanContest))
+		span.SetTag("send event from go mysql   time ", time.Now().Unix())
+		c.SpanContest = span.Context()
+		span.Finish()
 		return c, nil
 	case s.err = <-s.ech:
 		return nil, s.err
@@ -56,7 +61,7 @@ func (s *BinlogStreamer) GetEventWithStartTime(ctx context.Context, startTime ti
 	}
 }
 
-// DumpEvents dumps all left events
+// DumpEvents dumps all left eventsmax_payload
 func (s *BinlogStreamer) DumpEvents() []*BinlogEvent {
 	count := len(s.ch)
 	events := make([]*BinlogEvent, 0, count)
