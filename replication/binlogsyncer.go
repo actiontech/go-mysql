@@ -760,7 +760,10 @@ func (b *BinlogSyncer) parseEvent(spanContext opentracing.SpanContext, s *Binlog
 		prev := b.currGset.Clone()
 		err := b.currGset.Update(gtid)
 		if err == nil {
-			b.prevGset = prev
+			// right after reconnect we will see same gtid as we saw before, thus currGset will not get changed
+			if !b.currGset.Equal(prev) {
+				b.prevGset = prev
+			}
 		}
 		return err
 	}
