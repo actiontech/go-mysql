@@ -71,6 +71,10 @@ func (s *BinlogStreamer) DumpEvents() []*BinlogEvent {
 	return events
 }
 
+func (s *BinlogStreamer) QueneSize() int {
+	return len(s.ch)
+}
+
 func (s *BinlogStreamer) close() {
 	s.closeWithError(ErrSyncClosed)
 }
