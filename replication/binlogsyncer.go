@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-mysql-org/go-mysql/client"
@@ -816,6 +817,7 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 	needStop := false
 	select {
 	case s.ch <- e:
+		atomic.AddInt64(&s.mem, int64(len(e.RawData)))
 	case <-b.ctx.Done():
 		needStop = true
 	}

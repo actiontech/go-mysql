@@ -6,6 +6,7 @@ import (
 
 	"github.com/pingcap/errors"
 	"github.com/siddontang/go-log/log"
+	"sync/atomic"
 )
 
 var (
@@ -18,6 +19,7 @@ type BinlogStreamer struct {
 	ch  chan *BinlogEvent
 	ech chan error
 	err error
+	mem int64
 }
 
 // GetEvent gets the binlog event one by one, it will block until Syncer receives any events from MySQL
@@ -29,6 +31,7 @@ func (s *BinlogStreamer) GetEvent(ctx context.Context) (*BinlogEvent, error) {
 
 	select {
 	case c := <-s.ch:
+		atomic.AddInt64(&s.mem, -int64(len(c.RawData)))
 		return c, nil
 	case s.err = <-s.ech:
 		return nil, s.err
@@ -49,6 +52,7 @@ func (s *BinlogStreamer) GetEventWithStartTime(ctx context.Context, startTime ti
 		if int64(c.Header.Timestamp) >= startUnix {
 			return c, nil
 		}
+		atomic.AddInt64(&s.mem, -int64(len(c.RawData)))
 		return nil, nil
 	case s.err = <-s.ech:
 		return nil, s.err
@@ -63,12 +67,18 @@ func (s *BinlogStreamer) DumpEvents() []*BinlogEvent {
 	events := make([]*BinlogEvent, 0, count)
 	for i := 0; i < count; i++ {
 		events = append(events, <-s.ch)
+		atomic.AddInt64(&s.mem, -int64(len(events[i].RawData)))
 	}
 	return events
 }
 
-func (s *BinlogStreamer) QueneSize() int {
+
+func (s *BinlogStreamer) QueueSize() int {
 	return len(s.ch)
+}
+
+func (s *BinlogStreamer) QueueMem() int64 {
+	return s.mem
 }
 
 func (s *BinlogStreamer) close() {
