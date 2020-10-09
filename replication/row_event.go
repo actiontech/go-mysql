@@ -1105,7 +1105,7 @@ func (e *RowsEvent) decodeValue(data []byte, tp byte, meta uint16) (v interface{
 
 	case MYSQL_TYPE_YEAR:
 		n = 1
-		year := int(data[0])
+		year := int64(data[0])
 		if year == 0 {
 			v = year
 		} else {
