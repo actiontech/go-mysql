@@ -1,6 +1,7 @@
 package canal
 
 import (
+	"crypto/tls"
 	"io/ioutil"
 	"math/rand"
 	"time"
@@ -39,6 +40,9 @@ type DumpConfig struct {
 
 	// Set to change the default protocol to connect with
 	Protocol string `toml:"protocol"`
+
+	// Set extra options
+	ExtraOptions []string `toml:"extra_options"`
 }
 
 type Config struct {
@@ -76,6 +80,9 @@ type Config struct {
 	// Set to change the maximum number of attempts to re-establish a broken
 	// connection
 	MaxReconnectAttempts int `toml:"max_reconnect_attempts"`
+
+	// Set TLS config
+	TLSConfig *tls.Config
 }
 
 func NewConfigWithFile(name string) (*Config, error) {

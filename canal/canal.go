@@ -73,7 +73,7 @@ func NewCanal(cfg *Config) (*Canal, error) {
 		c.errorTablesGetTime = make(map[string]time.Time)
 	}
 	c.master = &masterInfo{}
-	
+
 	c.delay = new(uint32)
 
 	var err error
@@ -155,6 +155,7 @@ func (c *Canal) prepareDumper() error {
 	c.dumper.SkipMasterData(c.cfg.Dump.SkipMasterData)
 	c.dumper.SetMaxAllowedPacket(c.cfg.Dump.MaxAllowedPacketMB)
 	c.dumper.SetProtocol(c.cfg.Dump.Protocol)
+	c.dumper.SetExtraOptions(c.cfg.Dump.ExtraOptions)
 	// Use hex blob for mysqldump
 	c.dumper.SetHexBlob(true)
 
@@ -227,8 +228,10 @@ func (c *Canal) run() error {
 	}
 
 	if err := c.runSyncBinlog(); err != nil {
-		log.Errorf("canal start sync binlog err: %v", err)
-		return errors.Trace(err)
+		if errors.Cause(err) != context.Canceled {
+			log.Errorf("canal start sync binlog err: %v", err)
+			return errors.Trace(err)
+		}
 	}
 
 	return nil
@@ -240,11 +243,11 @@ func (c *Canal) Close() {
 	defer c.m.Unlock()
 
 	c.cancel()
+	c.syncer.Close()
 	c.connLock.Lock()
 	c.conn.Close()
 	c.conn = nil
 	c.connLock.Unlock()
-	c.syncer.Close()
 
 	c.eventHandler.OnPosSynced(c.master.Position(), c.master.GTIDSet(), true)
 }
@@ -422,6 +425,7 @@ func (c *Canal) prepareSyncer() error {
 		SemiSyncEnabled:         c.cfg.SemiSyncEnabled,
 		MaxReconnectAttempts:    c.cfg.MaxReconnectAttempts,
 		TimestampStringLocation: c.cfg.TimestampStringLocation,
+		TLSConfig:               c.cfg.TLSConfig,
 	}
 
 	if strings.Contains(c.cfg.Addr, "/") {
@@ -450,11 +454,16 @@ func (c *Canal) prepareSyncer() error {
 func (c *Canal) Execute(cmd string, args ...interface{}) (rr *mysql.Result, err error) {
 	c.connLock.Lock()
 	defer c.connLock.Unlock()
-
+	argF := make([]func(*client.Conn), 0)
+	if c.cfg.TLSConfig != nil {
+		argF = append(argF, func(conn *client.Conn) {
+			conn.SetTLSConfig(c.cfg.TLSConfig)
+		})
+	}
 	retryNum := 3
 	for i := 0; i < retryNum; i++ {
 		if c.conn == nil {
-			c.conn, err = client.Connect(c.cfg.Addr, c.cfg.User, c.cfg.Password, "")
+			c.conn, err = client.Connect(c.cfg.Addr, c.cfg.User, c.cfg.Password, "", argF...)
 			if err != nil {
 				return nil, errors.Trace(err)
 			}
