@@ -105,6 +105,13 @@ type BinlogSyncerConfig struct {
 	// https://mariadb.com/kb/en/library/com_binlog_dump/
 	// https://mariadb.com/kb/en/library/annotate_rows_event/
 	DumpCommandFlag uint16
+
+	// When streamer.QueueMem() is reaching the size, pause handling events until QueueMem()
+	// has decreased. 0 for no limit.
+	MemLimitSize    int64
+	// When having paused for MemLimitSeconds, force to handle a event to prevent MySQL
+	// net_write_timeout.
+	MemLimitSeconds int
 }
 
 // BinlogSyncer syncs binlog event from server.
@@ -796,6 +803,40 @@ func (b *BinlogSyncer) parseEvent(s *BinlogStreamer, data []byte) error {
 		event.GSet = getCurrentGtidSet()
 	case *QueryEvent:
 		event.GSet = getCurrentGtidSet()
+	}
+
+	reachingMemLimit := func() bool {
+		if b.cfg.MemLimitSize <= 0 {
+			return false
+		}
+		if s.QueueSize() == 0 {
+			return false
+		}
+		if s.QueueMem() + int64(len(e.RawData)) > b.cfg.MemLimitSize {
+			return true
+		} else {
+			return false
+		}
+	}
+	for i := 0; ; i++ {
+		if !b.running {
+			break
+		}
+		if !reachingMemLimit() {
+			if i > 0 {
+				log.Infof("reachingMemLimit. continue. %v %v", s.QueueMem(), i)
+			}
+			break
+		}
+		if i >= 2 * b.cfg.MemLimitSeconds {
+			log.Infof("reachingMemLimit. force continue. %v", s.QueueMem())
+			// To prevent MySQL net_write_timeout
+			break
+		}
+		if i == 0 {
+			log.Infof("reachingMemLimit. sleep. %v %v", s.QueueMem(), i)
+		}
+		time.Sleep(500 * time.Millisecond)
 	}
 
 	needStop := false
